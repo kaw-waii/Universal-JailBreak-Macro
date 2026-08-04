@@ -16,4 +16,4 @@ once you've installed AutoHotkey
 ->this file is your macro; you will need to open it every time you want to use it
 
 
-drop pistol before using if the macro equips it
+when equipping weapons, drop the pistol before using the hotkey if the macro equips it
