@@ -2,20 +2,40 @@
 ; GLOBALS
 ; ==========================
 
-global LOADOUT := []
-global dragStartRow := 0
-global dragging := false
-global weapons := ["pistol", "shotgun", "rifle", "revolver", "flintlock", "ak-47", "sword", "uzi", "forcefield launcher", "plasma pistol", "plasma shotgun", "sniper", "c4", "smoke grenade", "grenade", "rocket launcher"]
-global gunStoreGuns := ["pistol", "shotgun", "rifle", "revolver", "flintlock", "ak-47", "sword", "uzi", "forcefield launcher", "plasma pistol", "plasma shotgun", "sniper"]
-global gunStoreExplosives := ["c4", "c4 ammo", "smoke grenade", "smokecartridge", "grenade", "grenade ammo", "rocket ammo",  "rocket launcher"]
 global equipSequence := ""
-global equipKey := "F3"
-global exitKey := "F6"
-global weaponList
-global loadoutList
-global equipBox
-global exitBox
-global selectedLoadoutRow := 1
+global hotkeyList := []
+global functionList := ["Spawn Vehicle", "Equip Guns", "Rebind", "Combat Log"]
+global functionMap := Map(
+    "Spawn Vehicle", SpawnVehicle,
+    "Equip Guns", EquipMacro,
+    "Combat Log", CombatLog,
+    "Solve Power", SolvePower
+)
+global weapons := LoadList("Weapons")
+global gunStoreGuns := LoadList("GunStoreGuns")
+global gunStoreExplosives := LoadList("GunStoreExplosives")
+global garage := LoadList("Garage")
+global Loadouts := []
+global hotkeyView
+global loadoutCreatorGui
+global creatorWeaponList
+global creatorLoadoutList
+global creatorNameBox
+global creatorLoadout := []
+global currentOptionBox
+global manageLoadoutGui
+global manageLoadoutList
+global manageNameBox
+global editingLoadout := ""
+global createHotkeyAfterSave := false
+global activeHotkeys := []
+global rebinds := []
+global activeRebinds := []
+global rebindCreatorGui
+global rebindToBox
+global currentOptionList := []
+global firstGarageSpawnSequences := Map()
+
 
 ; ==========================
 ; STARTUP
@@ -23,8 +43,79 @@ global selectedLoadoutRow := 1
 
 LoadSettings()
 BuildGui()
-RebuildMacro()
 ApplyHotkeys()
+RefreshHotkeys()
+
+; ==========================
+; HELPER
+; ==========================
+
+LoadList(section) {
+    list := []
+    file := "dynamic.ini"
+    Loop 500 {
+        value := IniRead(file, section, A_Index, "")
+        if value != ""
+            list.Push(value)
+    }
+    return list
+}
+
+SendSequence(sequence, *) {
+    Send(sequence)
+}
+
+UpdateHotkeySequences(loadoutName) {
+    global hotkeyList
+
+    LoadLoadout(loadoutName)
+    sequence := BuildSeq(LOADOUT)
+
+    for hotkey in hotkeyList {
+        if hotkey.Function = "Equip Guns" && hotkey.Option = loadoutName
+            hotkey.Sequence := sequence
+    }
+
+    SaveSettings()
+}
+
+RebuildVehicleSequences() {
+    global hotkeyList
+
+    for hotkey in hotkeyList {
+        if hotkey.Function = "Spawn Vehicle"
+            hotkey.Sequence := BuildGarageSequence(hotkey.Option)
+    }
+
+    SaveSettings()
+}
+
+HotkeyAction(item, *) {
+    global firstGarageSpawnSequences
+
+    if item.Function = "Spawn Vehicle" {
+
+        if !firstGarageSpawnSequences.Has(item.Option) {
+            firstGarageSpawnSequences[item.Option] := BuildGarageFirstSequence(item.Option)
+            Send(firstGarageSpawnSequences[item.Option])
+            return
+        }
+    }
+
+    Send(item.Sequence)
+}
+
+AddRebind(from, to) {
+
+    IniWrite(
+        from "|" to,
+        "settings.ini",
+        "Rebinds",
+        IniRead("settings.ini", "Rebinds", "Count", 0) + 1
+    )
+
+    LoadRebinds()
+}
 
 ; ==========================
 ; GUI
@@ -32,175 +123,164 @@ ApplyHotkeys()
 
 BuildGui() {
     global
-
     mainGui := Gui(, "Universal JailBreak Macro")
-
-    mainGui.AddText("x20 y10", "Available Weapons")
-    weaponList := mainGui.AddListBox(
-        "x20 y30 w160 h260"
-    )
-
-    mainGui.AddText("x260 y10", "Current Loadout")
-    loadoutList := mainGui.AddListView(
-        "x260 y30 w200 h260",
-        ["", "Weapon"]
-    )
-
-    loadoutList.OnEvent(
-        "Click",
-        LoadoutClicked
-    )
-
-    loadoutList.ModifyCol(1, 25)
-    loadoutList.ModifyCol(2, 150)
-
-    mainGui.AddButton(
-        "x190 y90 w50",
-        ">>"
-    ).OnEvent(
-        "Click",
-        AddWeapon
-    )
-
-    mainGui.AddButton(
-        "x190 y140 w50",
-        "<<"
-    ).OnEvent(
-        "Click",
-        RemoveWeapon
-    )
-
-    mainGui.AddButton(
-        "x260 y300 w75",
-        "Move Up"
-    ).OnEvent(
-        "Click",
-        MoveUp
-    )
-
-    mainGui.AddButton(
-        "x345 y300 w75",
-        "Move Down"
-    ).OnEvent(
-        "Click",
-        MoveDown
-    )
-
-    mainGui.AddText(
-        "x20 y330",
-        "Equip Hotkey"
-    )
-
-    equipBox := mainGui.AddHotkey(
-        "x20 y350 w160",
-        equipKey
-    )
-
-    mainGui.AddText(
-        "x260 y330",
-        "Exit Hotkey"
-    )
-
-    exitBox := mainGui.AddHotkey(
-        "x260 y350 w160",
-        exitKey
-    )
-
-    mainGui.AddButton(
-        "x20 y380 w100",
-        "Save"
-    ).OnEvent(
-        "Click",
-        SaveSettings
-    )
-
-    mainGui.AddButton(
-        "x140 y380 w100",
-        "Reload"
-    ).OnEvent(
-        "Click",
-        ReloadConfig
-    )
-
-    RefreshLists()
-
+    mainGui.AddText("x20 y10","Hotkeys")
+    hotkeyView := mainGui.AddListView("x20 y30 w550 h180", ["Key", "Function", "Option"])
+    hotkeyView.ModifyCol(1,80)
+    hotkeyView.ModifyCol(2,150)
+    hotkeyView.ModifyCol(3,250)
+    mainGui.AddButton("x20 y230 w100","Add Hotkey").OnEvent("Click",AddHotkeyGUI)
+    mainGui.AddButton("x130 y230 w100","Remove").OnEvent("Click",RemoveHotkey)
+    mainGui.AddButton("x250 y230 w120", "Manage Loadouts").OnEvent("Click", OpenManageLoadouts)
     mainGui.Show()
 }
 
-; ==========================
-; LIST MANAGEMENT
-; ==========================
-
-RefreshLists() {
+OpenRebindCreator() {
     global
 
-    weaponList.Delete()
+    rebindCreatorGui := Gui(, "Create Rebind")
 
-    for weapon in weapons
-    {
-        exists := false
+    rebindCreatorGui.AddText("x20 y10", "Rebind to key")
 
-        for item in LOADOUT
-        {
-            if item = weapon
-            {
-                exists := true
-                break
-            }
+    rebindToBox := rebindCreatorGui.AddHotkey(
+        "x20 y30 w150"
+    )
+
+    rebindCreatorGui.AddButton(
+        "x20 y70 w100",
+        "Save"
+    ).OnEvent(
+        "Click",
+        SaveRebind
+    )
+
+    rebindCreatorGui.Show()
+}
+
+RefreshLoadoutOptions() {
+    global currentOptionBox, Loadouts
+    if !IsSet(currentOptionBox)
+        return
+
+    try {
+        currentOptionBox.Delete()
+        for loadoutName in Loadouts {
+            currentOptionBox.Add([loadoutName])
         }
-
-        if !exists
-            weaponList.Add([weapon])
-    }  
-
-    loadoutList.Delete() 
-
-    for index, weapon in LOADOUT
-    {
-        arrow := ""
-
-        if index = selectedLoadoutRow
-            arrow := "▶"
-
-        loadoutList.Add(
-            "",
-            arrow,
-            weapon
-        )
+        currentOptionBox.Add(["+ Create New Loadout"])
+    } catch {
+        currentOptionBox := unset
     }
 }
 
-AddWeapon(*) {
-    global 
-
-    item := weaponList.Text
-
-    if item = ""
-        return 
-
-    LOADOUT.Push(item)
-
-    RefreshLists()
+OpenManageLoadouts(*) {
+    global
+    manageLoadoutGui := Gui(, "Manage Loadouts")
+    manageLoadoutList := manageLoadoutGui.AddListBox("x20 y20 w200 h250")
+    manageNameBox := manageLoadoutGui.AddEdit("x240 y20 w180")
+    manageLoadoutGui.AddButton("x240 y60 w180", "Create New").OnEvent("Click", CreateLoadout)
+    manageLoadoutGui.AddButton("x240 y100 w180", "Edit").OnEvent("Click", EditLoadout)
+    manageLoadoutGui.AddButton("x240 y140 w180", "Rename").OnEvent("Click", RenameLoadout)
+    manageLoadoutGui.AddButton("x240 y180 w180", "Delete").OnEvent("Click", DeleteLoadout)
+    manageLoadoutList.OnEvent("Change", SelectManagedLoadout)
+    RefreshManageLoadouts()
+    manageLoadoutGui.Show()
 }
 
-RemoveWeapon(*) {
+RefreshManageLoadouts() {
     global
+    manageLoadoutList.Delete()
+    for loadout in Loadouts {
+        manageLoadoutList.Add([loadout])
+    }
+}
 
-    if selectedLoadoutRow < 1
+SelectManagedLoadout(*) {
+    global
+    name := manageLoadoutList.Text
+    if name != ""
+        manageNameBox.Value := name
+}
+
+RenameLoadout(*) {
+    global
+    oldName := manageLoadoutList.Text
+    newName := manageNameBox.Value
+    if oldName = "" || newName = ""
         return
 
-    if selectedLoadoutRow > LOADOUT.Length
+    if oldName = newName
         return
 
-    LOADOUT.RemoveAt(selectedLoadoutRow)
+    for name in Loadouts {
+        if name = newName {
+            MsgBox("A loadout with that name already exists.")
+            return
+        }
+    }
+    oldSection := "Loadout_" oldName
+    newSection := "Loadout_" newName
+    Loop 100 {
+        item := IniRead("settings.ini", oldSection, A_Index, "")
+        if item = ""
+            break
 
+        IniWrite(item, "settings.ini", newSection, A_Index)
+    }
+    IniDelete("settings.ini", oldSection)
+    for index, name in Loadouts {
+        if name = oldName {
+            Loadouts[index] := newName
+            IniWrite(newName, "settings.ini", "Loadouts", index)
+            break
+        }
+    }
+    RefreshManageLoadouts()
+    RefreshLoadoutOptions()
+}
 
-    ; move selection to a valid item
-    if selectedLoadoutRow > LOADOUT.Length
-        selectedLoadoutRow := LOADOUT.Length
+DeleteLoadout(*) {
+    global
+    name := manageLoadoutList.Text
+    if name = ""
+        return
 
+    result := MsgBox("Delete '" name "'?", "Confirm delete", "YesNo")
+    if result != "Yes"
+        return
 
-    RefreshLists()
+    IniDelete( "settings.ini", "Loadout_" name)
+    for index, loadoutName in Loadouts {
+        if loadoutName = name {
+            Loadouts.RemoveAt(index)
+            break
+        }
+    }
+    IniDelete("settings.ini", "Loadouts")
+    for index, loadoutName in Loadouts {
+        IniWrite(loadoutName, "settings.ini", "Loadouts", index)
+    }
+    RefreshManageLoadouts()
+    RefreshLoadoutOptions()
+}
+
+EditLoadout(*) {
+    global
+    name := manageLoadoutList.Text
+    if name = ""
+        return
+
+    editingLoadout := name
+    creatorLoadout := []
+    Loop 100 {
+        weapon := IniRead("settings.ini", "Loadout_" name, A_Index, "")
+        if weapon = ""
+            break
+
+        creatorLoadout.Push(weapon)
+    }
+    OpenLoadoutCreator()
+    manageLoadoutGui.Destroy()
 }
 
 ; ==========================
@@ -208,351 +288,842 @@ RemoveWeapon(*) {
 ; ==========================
 
 LoadSettings() {
-    global 
+    global
+    Loadouts := []
+    Loop 100 {
+        name := IniRead("settings.ini", "Loadouts", A_Index, "")
+        if name = ""
+            break
 
-    equipKey := IniRead(
+        Loadouts.Push(name)
+    }
+    LoadHotkeys()
+    LoadRebinds()
+    LOADOUT := []
+    if Loadouts.Length > 0
+        LoadLoadout(Loadouts[1])
+}
+
+SaveRebind(*) {
+
+    global rebindToBox
+
+    to := rebindToBox.Value
+
+    if to = "" {
+        MsgBox("Choose a key.")
+        return
+    }
+
+    count := IniRead(
         "settings.ini",
-        "Keys",
-        "Equip",
-        "F3"
-    ) 
+        "Rebinds",
+        "Count",
+        0
+    )
 
-    exitKey := IniRead(
+    count++
+
+    IniWrite(
+        to,
         "settings.ini",
-        "Keys",
-        "Exit",
-        "F6"
-    ) 
+        "Rebinds",
+        count
+    )
 
-    LOADOUT := [] 
+    IniWrite(
+        count,
+        "settings.ini",
+        "Rebinds",
+        "Count"
+    )
 
-    Loop 50
-    {
-        item := IniRead(
+    LoadRebinds()
+
+    RefreshLoadoutOptions()
+
+    rebindCreatorGui.Destroy()
+
+    MsgBox("Rebind option created.")
+}
+
+RefreshRebindOptions() {
+    global currentOptionBox, rebinds, currentOptionList
+
+    if !IsSet(currentOptionBox)
+        return
+
+    try {
+
+        currentOptionList := []
+
+        for key in rebinds
+            currentOptionList.Push(key)
+
+        currentOptionList.Push("+ Create New Rebind")
+
+        currentOptionBox.Delete()
+        currentOptionBox.Add(currentOptionList)
+
+    }
+    catch {
+        currentOptionBox := unset
+    }
+}
+
+LoadRebinds() {
+
+    global rebinds
+
+    rebinds := []
+
+    Loop 100 {
+
+        value := IniRead(
             "settings.ini",
-            "Loadout",
+            "Rebinds",
             A_Index,
             ""
-        ) 
+        )
 
-        if item != ""
-            LOADOUT.Push(item)
-    } 
+        if value = ""
+            continue
 
-    if LOADOUT.Length = 0
-    {
-        LOADOUT := []
+        rebinds.Push(value)
+    }
+}
+
+LoadHotkeys() {
+    global hotkeyList
+    hotkeyList := []
+    Loop {
+        value := IniRead("settings.ini", "Hotkeys", A_Index, "")
+        if value = ""
+            break
+
+        parts := StrSplit(value, "|")
+        if parts.Length < 2
+            continue
+
+        sequence := parts.Length >= 4 ? parts[4] : ""
+
+        if sequence = "" {
+
+            if parts[2] = "Equip Guns" {
+                LoadLoadout(parts[3])
+                sequence := BuildSeq(LOADOUT)
+            }
+
+            else if parts[2] = "Spawn Vehicle" {
+                sequence := BuildGarageSequence(parts[3])
+            }
+        }
+
+        hotkeyList.Push({
+            Key: parts[1],
+            Function: parts[2],
+            Option: parts.Length >= 3 ? parts[3] : "",
+            Sequence: sequence
+        })
     }
 }
 
 SaveSettings(*) {
-    global 
-
-    equipKey := equipBox.Value
-    exitKey := exitBox.Value 
-
-    IniWrite(
-        equipKey,
-        "settings.ini",
-        "Keys",
-        "Equip"
-    ) 
-
-    IniWrite(
-        exitKey,
-        "settings.ini",
-        "Keys",
-        "Exit"
-    ) 
-
-    IniDelete(
-        "settings.ini",
-        "Loadout"
-    ) 
-
-    for i,item in LOADOUT
-    {
-        IniWrite(
-            item,
-            "settings.ini",
-            "Loadout",
-            i
-        )
-    } 
-
-    RebuildMacro()
-
-    ApplyHotkeys() 
-
+    global
+    ; Save loadout
+    IniDelete("settings.ini", "Loadout")
+    for i, item in LOADOUT {
+        IniWrite(item, "settings.ini", "Loadout", i)
+    }
+    ;Save hotkeys
+    IniDelete("settings.ini", "Hotkeys")
+    for i, hkey in hotkeyList {
+        IniWrite(hkey.Key "|" hkey.Function "|" hkey.Option "|" hkey.Sequence, "settings.ini", "Hotkeys", i)
+    }
+    ApplyHotkeys()
     MsgBox("Saved!")
+}
+
+SaveHotkeys() {
+    global hotkeyList
+
+    IniDelete("settings.ini", "Hotkeys")
+
+    for index, hkey in hotkeyList {
+        IniWrite(
+            hkey.Key "|" hkey.Function "|" hkey.Option "|" hkey.Sequence,
+            "settings.ini",
+            "Hotkeys",
+            index
+        )
+    }
 }
 
 ReloadConfig(*) {
     LoadSettings()
-    RefreshLists()
-    RebuildMacro()
     ApplyHotkeys()
 }
 
 ; ==========================
-; LOADOUT SORTING
+; Options
 ; ==========================
 
-MoveLoadoutItem(from,to) {
-    global 
+UpdateOptionControl(optionBox, funcBox, defaultFunction := "", defaultOption := "", *) {
+    global Loadouts, garage, rebinds, currentOptionList
 
-    if from = to
-        return 
+    currentOptionList := []
+    optionBox.Delete()
 
-    item := LOADOUT.RemoveAt(from)
+    if funcBox.Text = "Spawn Vehicle" {
 
-    LOADOUT.InsertAt(
-        to,
-        item
-    ) 
+        for vehicle in garage
+            currentOptionList.Push(vehicle)
 
-    selectedLoadoutRow := to
+    }
+    else if funcBox.Text = "Equip Guns" {
 
-    RefreshLists()
+        for loadoutName in Loadouts
+            currentOptionList.Push(loadoutName)
+
+        currentOptionList.Push("+ Create New Loadout")
+
+    }
+    else if funcBox.Text = "Rebind" {
+
+        for key in rebinds
+            currentOptionList.Push(key)
+
+        currentOptionList.Push("+ Create New Rebind")
+
+    }
+
+    if currentOptionList.Length > 0
+        optionBox.Add(currentOptionList)
+
+    optionBox.Enabled := true
+
+    if defaultOption != "" {
+        for index, value in currentOptionList {
+            if value = defaultOption {
+                optionBox.Choose(index)
+                break
+            }
+        }
+    }
 }
 
-MoveUp(*) {
-    global 
+; ==========================
+; LOADOUT
+; ==========================
 
-    row := selectedLoadoutRow 
+LoadLoadout(name) {
+    global LOADOUT
+    LOADOUT := []
+    Loop 100 {
+        weapon := IniRead("settings.ini", "Loadout_" name, A_Index, "")
+        if weapon = ""
+            break
 
-    if row <= 1
-        return 
-
-    MoveLoadoutItem(
-        row,
-        row - 1
-    )
+        LOADOUT.Push(weapon)
+    }
 }
 
-MoveDown(*) {
-    global 
+SaveLoadout(name, weapons) {
+    global Loadouts
+    section := "Loadout_" name
+    ; check overwrite
+    exists := false
+    for oldName in Loadouts {
+        if oldName = name {
+            exists := true
+            break
+        }
+    }
+    if exists {
+        result := MsgBox(
+            "A loadout named '" name "' already exists.`nOverwrite it?",
+            "Confirm overwrite",
+            "YesNo"
+        )
+        if result != "Yes"
+            return false
+    }
+    else{
+        Loadouts.Push(name)
+        IniWrite( name, "settings.ini", "Loadouts", Loadouts.Length)
+    }
+    ; replace old loadout
+    IniDelete("settings.ini", section)
 
-    row := selectedLoadoutRow 
-
-    if row >= LOADOUT.Length
-        return 
-
-    MoveLoadoutItem(
-        row,
-        row + 1
-    )
+    for index, weapon in weapons {
+        IniWrite( weapon, "settings.ini", section, index)
+    }
+    return true
 }
 
-LoadoutClicked(ctrl, info) {
+CheckCreateLoadout(optionBox, *) {
+
+    if optionBox.Text = "+ Create New Loadout" {
+
+        createHotkeyAfterSave := false
+        OpenLoadoutCreator()
+        optionBox.Text := ""
+
+    }
+
+    else if optionBox.Text = "+ Create New Rebind" {
+
+        OpenRebindCreator()
+        optionBox.Text := ""
+
+    }
+}
+
+OpenLoadoutCreator() {
     global
 
-    row := loadoutList.GetNext()
+    if !IsSet(creatorLoadout)
+        creatorLoadout := []
 
-    if row
-    {
-        selectedLoadoutRow := row
-        RefreshLists()
+    loadoutCreatorGui := Gui(, "Create Loadout")
+    loadoutCreatorGui.AddText("x20 y10", "Available Weapons")
+    creatorWeaponList := loadoutCreatorGui.AddListBox("x20 y30 w160 h260")
+    loadoutCreatorGui.AddText("x260 y10", "Loadout")
+    creatorLoadoutList := loadoutCreatorGui.AddListView("x260 y30 w200 h260", ["Weapon"])
+    creatorNameBox := loadoutCreatorGui.AddEdit("x20 y310 w200", editingLoadout)
+    loadoutCreatorGui.AddButton("x20 y335 w80", "Save").OnEvent("Click", SaveNewLoadout)
+    loadoutCreatorGui.AddButton("x190 y100 w50", ">>").OnEvent("Click", CreatorAddWeapon)
+    loadoutCreatorGui.AddButton("x190 y150 w50", "<<").OnEvent("Click", CreatorRemoveWeapon)
+    loadoutCreatorGui.AddButton("x260 y310 w80", "Move Up").OnEvent("Click", CreatorMoveUp)
+    loadoutCreatorGui.AddButton("x350 y310 w80", "Move Down").OnEvent("Click", CreatorMoveDown)
+    RefreshCreatorLists()
+    loadoutCreatorGui.Show()
+}
+
+RefreshCreatorLists() {
+    global
+    creatorWeaponList.Delete()
+    for weapon in weapons {
+        exists := false
+        for item in creatorLoadout {
+            if item = weapon {
+                exists := true
+                break
+            }
+        }
+        if !exists {
+            creatorWeaponList.Add([weapon])
+        }
     }
+    creatorLoadoutList.Delete()
+    for weapon in creatorLoadout {
+        creatorLoadoutList.Add("", weapon)
+    }
+}
+
+CreatorAddWeapon(*) {
+    global
+    weapon := creatorWeaponList.Text
+    if weapon = ""
+        return
+
+    creatorLoadout.Push(weapon)
+    RefreshCreatorLists()
+}
+
+CreatorRemoveWeapon(*) {
+    global
+    row := creatorLoadoutList.GetNext()
+    if row {
+        creatorLoadout.RemoveAt(row)
+        RefreshCreatorLists()
+    }
+}
+
+CreatorMoveUp(*) {
+    global
+    row := creatorLoadoutList.GetNext()
+    if !row || row <= 1
+        return
+
+    item := creatorLoadout.RemoveAt(row)
+    creatorLoadout.InsertAt(row - 1, item)
+    RefreshCreatorLists()
+}
+
+CreatorMoveDown(*) {
+    global
+    row := creatorLoadoutList.GetNext()
+    if !row || row >= creatorLoadout.Length
+        return
+
+    item := creatorLoadout.RemoveAt(row)
+    creatorLoadout.InsertAt(row + 1, item)
+    RefreshCreatorLists()
+}
+
+SaveNewLoadout(*) {
+    global
+    name := creatorNameBox.Value
+    if name = "" {
+        MsgBox("Enter a loadout name.")
+        return
+    }
+    if creatorLoadout.Length = 0 {
+        MsgBox("Loadout is empty.")
+        return
+    }
+
+    if SaveLoadout(name, creatorLoadout) {
+        LoadSettings()
+        RefreshLoadoutOptions()
+        loadoutCreatorGui.Destroy()
+        if createHotkeyAfterSave {
+
+            result := MsgBox("Create Hotkey for this Loadout?", "Loadout Saved", "YesNo")
+            if result = "Yes" {
+                AddHotkeyGUI("Equip Guns", name)
+            }
+        }
+        else {
+            MsgBox("Loadout saved!")
+        }
+    }
+}
+
+CreateLoadout(*) {
+    global
+    editingLoadout := ""
+    creatorLoadout := []
+    createHotkeyAfterSave := true
+    OpenLoadoutCreator()
 }
 
 ; ==========================
 ; HOTKEYS
 ; ==========================
 
-ApplyHotkeys() {
-    global 
+AddHotkeyGUI(defaultFunction := "", defaultOption := "", *) {
+    global
+    g := Gui(, "Add Hotkey")
+    g.AddText(, "Key")
+    keyBox := g.AddHotkey("w150")
+    g.AddText(, "Function")
+    funcBox := g.AddDropDownList("w200", functionList)
+    g.AddText(, "Option")
+    optionBox := g.AddDropDownList("w250", [])
+    currentOptionBox := optionBox
+    funcBox.OnEvent("Change", UpdateOptionControl.Bind(optionBox, funcBox))
+    optionBox.OnEvent("Change", CheckCreateLoadout.Bind(optionBox))
+    if defaultFunction != "" {
 
-    try Hotkey(
-        equipKey,
-        EquipMacro,
-        "On"
-    ) 
-
-    try Hotkey(
-        exitKey,
-        ExitApp,
-        "On"
-    )
+        for index, value in functionList {
+            if value = defaultFunction {
+                funcBox.Choose(index)
+                break
+            }
+        }
+        UpdateOptionControl(optionBox, funcBox, defaultFunction, defaultOption)
+    }
+    g.AddButton(, "Add").OnEvent("Click", SaveHotkey.Bind(g, keyBox, funcBox, optionBox))
+    g.Show()
 }
 
-EquipMacro(*) {
+SaveHotkey(parent, keyBox, funcBox, optionBox, *) {
+    global
+    newKey := keyBox.Value
+    if newKey = "" {
+        MsgBox("Please select a hotkey.")
+        return
+    }
+    for hkey in hotkeyList {
+        if hkey.Key = newKey {
+            MsgBox("This hotkey (" hkey.Key ") is already assigned.`nChoose another key.", "Duplicate Hotkey")
+            return
+        }
+    }
+    sequence := ""
+    if funcBox.Text = "Equip Guns" {
+        LoadLoadout(optionBox.Text)
+        sequence := BuildSeq(LOADOUT)
+    }
+    else if funcBox.Text = "Spawn Vehicle" {
+        sequence := BuildGarageSequence(optionBox.Text)
+    }
+    else if funcBox.Text = "Combat Log" {
+        sequence := IniRead("dynamic.ini", "Paths", "logPath", "")
+    }
+    else if funcBox.Text = "Rebind" {
+        sequence := optionBox.Text
+    }
+    hotkeyList.Push({Key: newKey, Function: funcBox.Text, Option: optionBox.Text, Sequence: sequence})
+    SaveHotkeys()
+    RefreshHotkeys()
+    ApplyHotkeys()
+
+    parent.Destroy()
+}
+
+RefreshHotkeys() {
+    global
+    hotkeyView.Delete()
+    for item in hotkeyList {
+        hotkeyView.Add("", item.Key, item.Function, item.Option)
+    }
+}
+
+RemoveHotkey(*) {
     global
 
-    Send(equipSequence)
+    row := hotkeyView.GetNext()
+
+    if row {
+        hotkeyList.RemoveAt(row)
+        SaveHotkeys()
+        ApplyHotkeys()
+        RefreshHotkeys()
+    }
+}
+
+ApplyHotkeys() {
+    global hotkeyList, functionMap, activeHotkeys
+
+    for key in activeHotkeys {
+        try Hotkey(key, "Off")
+    }
+
+    activeHotkeys := []
+
+    for item in hotkeyList {
+
+        if item.Sequence != "" {
+            Hotkey(item.Key, SendSequence.Bind(item.Sequence), "On")
+        }
+        else if functionMap.Has(item.Function) {
+            Hotkey(item.Key, HotkeyAction.Bind(item), "On")
+        }
+
+        activeHotkeys.Push(item.Key)
+    }
+}
+
+EquipMacro(sequence := "", *) {
+    if sequence = ""
+        return
+
+    Send(sequence)
+}
+
+SpawnVehicle(vehicle := "", *) {
+    global firstGarageSpawn
+
+    if vehicle = ""
+        return
+
+    if firstGarageSpawn {
+        sequence := BuildGarageFirstSequence(vehicle)
+        firstGarageSpawn := false
+    }
+    else {
+        sequence := BuildGarageSequence(vehicle)
+    }
+
+    Send(sequence)
+}
+
+BuildGarageFirstSequence(vehicle) {
+
+    garageStart := IniRead("dynamic.ini", "Paths", "GarageFirstStart", "")
+
+    if garageStart = "" {
+        MsgBox("Garage first start path missing.")
+        return ""
+    }
+
+    vehiclePath := BuildGaragePath(vehicle)
+
+    if vehiclePath = ""
+        return ""
+
+    return garageStart vehiclePath "{Enter}{SC02B}"
+}
+
+LoadPath(name) {
+    return IniRead("dynamic.ini", "Paths", name, "")
+}
+
+CombatLog(option := "", *) {
+    sequence := LoadPath("logPath")
+
+    if sequence = ""
+        return
+
+    Send(sequence)
+}
+
+SolvePower(option := "", *) {
+    MsgBox("Solve power triggered.")
+}
+
+AddLoadoutHotkey(loadoutName) {
+    global
+    g := Gui(, "Create Loadout Hotkey")
+    g.AddText(, "Key")
+    keyBox := g.AddHotkey("w150")
+    g.AddText(, "Loadout")
+    g.AddText("w200", loadoutName)
+    g.AddButton(, "Add").OnEvent("Click", SaveLoadoutHotkey.Bind(g, keyBox, loadoutName))
+    g.Show()
+}
+
+SaveLoadoutHotkey(parent, keyBox, loadoutName, *) {
+    global
+
+    if keyBox.Value = "" {
+        MsgBox("Select a key.")
+        return
+    }
+
+    LoadLoadout(loadoutName)
+    sequence := BuildSeq(LOADOUT)
+
+    hotkeyList.Push({
+        Key: keyBox.Value,
+        Function: "Equip Guns",
+        Option: loadoutName,
+        Sequence: sequence
+    })
+
+    SaveHotkeys()
+    RefreshHotkeys()
+    ApplyHotkeys()
+
+    parent.Destroy()
+    MsgBox("Hotkey created!")
 }
 
 ; ==========================
 ; BUILD MACRO SEQUENCE
 ; ==========================
 
-RebuildMacro() {
-    global
+BuildSeq(loadout := "") {
+    global gunStoreGuns, gunStoreExplosives
 
-    equipSequence := BuildSeq()
-}
-
-BuildSeq() {
-    global LOADOUT, gunStoreGuns, gunStoreExplosives 
+    if !IsObject(loadout)
+        loadout := LOADOUT
 
     w := "{SC011}"
     a := "{SC01E}"
     s := "{SC01F}"
-    d := "{SC020}" 
+    d := "{SC020}"
 
-    seq := w a s d "{SC02B}" w w w w w w w w w w s a 
+    seq := w a s d "{SC02B}" w w w w w w w w w w s a
 
-    currentIndex := 1 
+    currentIndex := 1
 
-    for _, item in LOADOUT
-    {
+    for _, item in loadout {
+
         targetIndex := 0
-        isExplosive := false 
+        isExplosive := false
 
-        for index, v in gunStoreGuns
-        {
-            if (v = item)
-            {
+        for index, v in gunStoreGuns {
+            if v = item {
                 targetIndex := index
                 break
             }
-        } 
+        }
 
-        if targetIndex = 0
-        {
-            for index, v in gunStoreExplosives
-            {
-                if (v = item)
-                {
+        if targetIndex = 0 {
+            for index, v in gunStoreExplosives {
+                if v = item {
                     targetIndex := index
                     isExplosive := true
                     break
                 }
             }
-        } 
+        }
 
-        if targetIndex = 0
-        {
-            MsgBox(
-                "Invalid loadout item: "
-                item
-            )
-
+        if targetIndex = 0 {
+            MsgBox("Invalid loadout item: " item)
             return ""
-        }  
+        }
 
-        ; ======================
+
         ; NORMAL WEAPONS
-        ; ======================
+        if !isExplosive {
 
-        if !isExplosive
-        {
-            steps := targetIndex - currentIndex 
+            steps := targetIndex - currentIndex
 
-            if steps > 0
-            {
+            if steps > 0 {
                 Loop steps
                     seq .= d
             }
-            else if steps < 0
-            {
+            else if steps < 0 {
                 Loop Abs(steps)
                     seq .= a
-            } 
+            }
 
             seq .= "{Enter}"
-
             currentIndex := targetIndex
-
             continue
-        }  
+        }
 
-        ; ======================
+
         ; EXPLOSIVES
-        ; ====================== 
 
-        steps := 1 - currentIndex 
+        steps := 1 - currentIndex
 
-        if steps > 0
-        {
+        if steps > 0 {
             Loop steps
                 seq .= d
         }
-        else if steps < 0
-        {
+        else if steps < 0 {
             Loop Abs(steps)
                 seq .= a
-        } 
+        }
 
-        currentIndex := 1 
+        currentIndex := 1
 
-        seq .= a "{Enter}" s d 
+        seq .= a "{Enter}" s d
 
-        explosiveSteps := targetIndex - 1 
 
-        if explosiveSteps > 0
-        {
+        explosiveSteps := targetIndex - 1
+
+        if explosiveSteps > 0 {
             Loop explosiveSteps
                 seq .= d
-        } 
+        }
 
-        seq .= "{Enter}"  
+        seq .= "{Enter}"
 
-        ammoIndex := 0 
+
+        ammoIndex := 0
 
         if item = "c4"
             ammoIndex := 2
-
         else if item = "smoke grenade"
             ammoIndex := 4
-
         else if item = "grenade"
             ammoIndex := 6
-
         else if item = "rocket launcher"
-            ammoIndex := 7  
+            ammoIndex := 7
 
-        if ammoIndex > 0
-        {
-            ammoSteps := ammoIndex - targetIndex 
 
-            if ammoSteps > 0
-            {
+        if ammoIndex > 0 {
+
+            ammoSteps := ammoIndex - targetIndex
+
+            if ammoSteps > 0 {
                 Loop ammoSteps
                     seq .= d
             }
-            else if ammoSteps < 0
-            {
+            else if ammoSteps < 0 {
                 Loop Abs(ammoSteps)
                     seq .= a
-            } 
+            }
 
-            seq .= "{Enter 10}" 
 
-            if ammoSteps > 0
-            {
+            seq .= "{Enter 10}"
+
+
+            if ammoSteps > 0 {
                 Loop ammoSteps
                     seq .= a
             }
-            else if ammoSteps < 0
-            {
+            else if ammoSteps < 0 {
                 Loop Abs(ammoSteps)
                     seq .= d
             }
-        }  
+        }
 
-        if explosiveSteps > 0
-        {
+
+        if explosiveSteps > 0 {
             Loop explosiveSteps
                 seq .= a
-        } 
+        }
 
-        seq .= a w "{Enter}" s s d 
+
+        seq .= a w "{Enter}" s s d
 
         currentIndex := 1
-    } 
+    }
 
-    seq .= "{SC02B}" 
+    seq .= "{SC02B}"
 
     return seq
 }
+
+BuildGaragePath(vehicle) {
+    global garage
+
+    reversedGarage := []
+
+    for index, name in garage {
+        reversedGarage.InsertAt(1, name)
+    }
+
+    location := 0
+
+    for index, name in reversedGarage {
+        if name = vehicle {
+            location := index
+            break
+        }
+    }
+
+    if location = 0 {
+        MsgBox("Vehicle not found: " vehicle)
+        return ""
+    }
+
+    row := Ceil(location / 6)
+    column := Mod(location - 1, 6) + 1
+
+    s := "{SC01F}"
+    a := "{SC01E}"
+    d := "{SC020}"
+
+    path := ""
+
+    ; move down from slot 6
+    if row > 1 {
+        Loop (row - 1) {
+            path .= s s
+        }
+    }
+    ; move horizontally from column 6
+    if column < 6 {
+        Loop (6 - column) {
+            path .= a
+        }
+    }
+    return path
+}
+
+BuildGarageSequence(vehicle) {
+    garageStart := IniRead("dynamic.ini", "Paths", "GarageStart", "")
+
+
+    if garageStart = "" {
+        MsgBox("Garage path missing.")
+        return ""
+    }
+    vehiclePath := BuildGaragePath(vehicle)
+    if vehiclePath = ""
+        return ""
+
+    return garageStart vehiclePath "{Enter}{SC02B}"
+}
+
+/*
+rejoin check
+once color changes -> must have rejoined, only while roblox is open
+Screen:	45, 33
+Window:	45, 33
+Client:	45, 33 (default)
+Color:	F4F5F8 (Red=F4 Green=F5 Blue=F8)
+inform via tooltip, and error sound, "Did you rejoin? If yes, make sure your garage is sorting by newest."
+
+add hotkey sets
+
+*/
