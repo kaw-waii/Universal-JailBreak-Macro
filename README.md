@@ -3,7 +3,7 @@
 SETUP:
 click on the green code button, press download zip
 
-depends on ahkv2 being installed https://www.autohotkey.com/ 
+depends on ahk v2 being installed https://www.autohotkey.com/ 
 
 once you've installed AutoHotkey
   ->unzip the folder
