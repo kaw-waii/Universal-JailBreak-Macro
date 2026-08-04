@@ -1114,16 +1114,3 @@ BuildGarageSequence(vehicle) {
 
     return garageStart vehiclePath "{Enter}{SC02B}"
 }
-
-/*
-rejoin check
-once color changes -> must have rejoined, only while roblox is open
-Screen:	45, 33
-Window:	45, 33
-Client:	45, 33 (default)
-Color:	F4F5F8 (Red=F4 Green=F5 Blue=F8)
-inform via tooltip, and error sound, "Did you rejoin? If yes, make sure your garage is sorting by newest."
-
-add hotkey sets
-
-*/
